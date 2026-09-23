@@ -1146,3 +1146,283 @@ input:focus {
     width: 100%;
   }
 }
+
+.round-label {
+  display: inline-block;
+
+  margin-bottom: 18px;
+  padding: 8px 16px;
+
+  border-radius: 999px;
+
+  font-size: 0.78rem;
+  font-weight: 900;
+
+  letter-spacing: 1.7px;
+  text-transform: uppercase;
+
+  color: #27113d;
+
+  background: linear-gradient(
+    135deg,
+    #ffd84d,
+    #ff9f43
+  );
+}
+
+.host-vote-card {
+  max-width: 900px;
+}
+
+.host-round-instruction {
+  margin: 4px 0 26px;
+
+  font-size: 1.05rem;
+  font-weight: 800;
+
+  color: rgba(
+    255,
+    255,
+    255,
+    0.7
+  );
+}
+
+.host-match-grid {
+  display: grid;
+
+  grid-template-columns:
+    minmax(0, 1fr)
+    auto
+    minmax(0, 1fr);
+
+  gap: 18px;
+
+  align-items: stretch;
+}
+
+.host-opinion-panel {
+  min-height: 190px;
+
+  position: relative;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 28px 24px;
+
+  border-radius: 20px;
+
+  border: 2px solid
+    rgba(
+      255,
+      255,
+      255,
+      0.15
+    );
+
+  overflow: hidden;
+}
+
+.opinion-panel-a {
+  background: linear-gradient(
+    135deg,
+    #d72d7d,
+    #8a2be2
+  );
+}
+
+.opinion-panel-b {
+  background: linear-gradient(
+    135deg,
+    #00b8d9,
+    #007cf0
+  );
+}
+
+.opinion-label {
+  position: absolute;
+
+  top: 14px;
+  left: 16px;
+
+  width: 34px;
+  height: 34px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border-radius: 50%;
+
+  font-size: 0.9rem;
+  font-weight: 900;
+
+  background: rgba(
+    0,
+    0,
+    0,
+    0.22
+  );
+
+  color: white;
+}
+
+.opinion-panel-text {
+  font-size: clamp(
+    1.15rem,
+    3vw,
+    1.65rem
+  );
+
+  line-height: 1.35;
+
+  font-weight: 900;
+}
+
+.versus-large {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  min-width: 52px;
+
+  font-size: 1rem;
+  font-weight: 900;
+
+  letter-spacing: 3px;
+
+  color: rgba(
+    255,
+    255,
+    255,
+    0.5
+  );
+}
+
+.player-vote-buttons {
+  display: grid;
+
+  grid-template-columns:
+    1fr 1fr;
+
+  gap: 14px;
+
+  margin-top: 22px;
+}
+
+.player-vote-buttons
+  .opinion-choice {
+  min-height: unset;
+
+  padding: 16px;
+
+  font-size: 1rem;
+}
+
+.host-voting-status {
+  margin-top: 26px;
+
+  display: inline-flex;
+  align-items: center;
+
+  gap: 9px;
+
+  padding: 10px 16px;
+
+  border-radius: 999px;
+
+  background: rgba(
+    117,
+    239,
+    255,
+    0.08
+  );
+
+  color: #75efff;
+
+  font-weight: 800;
+}
+
+.host-voting-dot {
+  width: 9px;
+  height: 9px;
+
+  border-radius: 50%;
+
+  background: #52ffbd;
+
+  box-shadow:
+    0 0 12px
+      rgba(
+        82,
+        255,
+        189,
+        0.75
+      );
+
+  animation:
+    pulse-dot
+    1s ease-in-out
+    infinite alternate;
+}
+
+@keyframes pulse-dot {
+  from {
+    opacity: 0.45;
+    transform: scale(0.9);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+.match-result-large {
+  margin-top: 28px;
+}
+
+.result-label {
+  display: block;
+
+  margin: 8px 0;
+
+  font-size: 0.75rem;
+  font-weight: 900;
+
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+
+  color: rgba(
+    255,
+    255,
+    255,
+    0.5
+  );
+}
+
+.result-winner {
+  font-size: 1.2rem;
+}
+
+@media (max-width: 700px) {
+  .host-match-grid {
+    grid-template-columns:
+      1fr;
+  }
+
+  .versus-large {
+    min-height: 32px;
+  }
+
+  .host-opinion-panel {
+    min-height: 135px;
+  }
+
+  .player-vote-buttons {
+    grid-template-columns:
+      1fr;
+  }
+}

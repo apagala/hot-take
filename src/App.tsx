@@ -1,10 +1,10 @@
 import {
   useEffect,
+  useRef,
   useState,
 } from "react";
 
 import { io } from "socket.io-client";
-
 import { QRCodeSVG } from "qrcode.react";
 
 import "./App.css";
@@ -45,20 +45,44 @@ type MatchData = {
   roundNumber: number;
   matchIndex: number;
 
+  totalOpinions: number;
+
   endsAt: number;
 };
 
-type GuessResult = {
-  submitted: boolean;
-  correct: boolean;
-  points: number;
-};
+function getRoundName(
+  roundNumber: number,
+  totalOpinions: number
+) {
+  const totalRounds =
+    Math.log2(totalOpinions);
+
+  const remaining =
+    totalRounds -
+    roundNumber +
+    1;
+
+  if (remaining === 1) {
+    return "Final";
+  }
+
+  if (remaining === 2) {
+    return "Semi Final";
+  }
+
+  if (remaining === 3) {
+    return "Quarter Final";
+  }
+
+  return `Round of ${Math.pow(
+    2,
+    remaining
+  )}`;
+}
 
 function App() {
-  const [
-    roomCode,
-    setRoomCode,
-  ] = useState("");
+  const [roomCode, setRoomCode] =
+    useState("");
 
   const [
     playerName,
@@ -75,12 +99,8 @@ function App() {
     setJoinedRoomCode,
   ] = useState("");
 
-  const [
-    players,
-    setPlayers,
-  ] = useState<Player[]>(
-    []
-  );
+  const [players, setPlayers] =
+    useState<Player[]>([]);
 
   const [
     gameState,
@@ -113,9 +133,8 @@ function App() {
   const [
     extraOpinions,
     setExtraOpinions,
-  ] = useState<
-    string[]
-  >([]);
+  ] =
+    useState<string[]>([]);
 
   const [
     hasSubmittedOpinions,
@@ -139,9 +158,29 @@ function App() {
     );
 
   const [
+    selectedGuesses,
+    setSelectedGuesses,
+  ] = useState<
+    Record<string, string>
+  >({});
+
+  const [
+    roundSubmitted,
+    setRoundSubmitted,
+  ] = useState(false);
+
+  const [
     secondsLeft,
     setSecondsLeft,
   ] = useState(10);
+
+  const [
+    votingProgress,
+    setVotingProgress,
+  ] = useState({
+    submitted: 0,
+    total: 0,
+  });
 
   const [
     matchResult,
@@ -163,60 +202,102 @@ function App() {
   const [
     finalRankings,
     setFinalRankings,
-  ] = useState<
-    Opinion[]
-  >([]);
+  ] =
+    useState<Opinion[]>([]);
 
   const [
     finalPlayers,
     setFinalPlayers,
-  ] = useState<
-    Player[]
-  >([]);
+  ] =
+    useState<Player[]>([]);
 
   const [
     revealAuthors,
     setRevealAuthors,
   ] = useState(false);
 
-  const [
-    guessSelections,
-    setGuessSelections,
-  ] = useState<
-    Record<string, string>
-  >({});
-
-  const [
-    guessResults,
-    setGuessResults,
-  ] = useState<
-    Record<
-      string,
-      GuessResult
-    >
-  >({});
+  const autoSubmittedRef =
+    useRef(false);
 
   useEffect(() => {
-    const pathParts =
+    const parts =
       window.location.pathname.split(
         "/"
       );
 
     if (
-      pathParts[1] ===
-        "join" &&
-      pathParts[2]
+      parts[1] === "join" &&
+      parts[2]
     ) {
       setRoomCode(
-        pathParts[2].toUpperCase()
+        parts[2].toUpperCase()
       );
     }
   }, []);
 
   useEffect(() => {
+    if (!currentMatch) {
+      return;
+    }
+
+    const updateTimer = () => {
+      const milliseconds =
+        currentMatch.endsAt -
+        Date.now();
+
+      const seconds =
+        Math.max(
+          0,
+          Math.ceil(
+            milliseconds / 1000
+          )
+        );
+
+      setSecondsLeft(seconds);
+    };
+
+    updateTimer();
+
+    const interval =
+      window.setInterval(
+        updateTimer,
+        100
+      );
+
+    return () => {
+      window.clearInterval(
+        interval
+      );
+    };
+  }, [
+    currentMatch?.endsAt,
+  ]);
+
+  useEffect(() => {
+    if (
+      secondsLeft !== 0 ||
+      !currentMatch ||
+      roundSubmitted ||
+      !selectedVote ||
+      autoSubmittedRef.current
+    ) {
+      return;
+    }
+
+    autoSubmittedRef.current =
+      true;
+
+    submitCurrentRound(true);
+  }, [
+    secondsLeft,
+    currentMatch,
+    roundSubmitted,
+    selectedVote,
+  ]);
+
+  useEffect(() => {
     const handleRoomUpdated = (
       data: {
-        roomCode: string;
         players: Player[];
         gameState: GameState;
         submittedCount: number;
@@ -258,42 +339,33 @@ function App() {
           null
         );
 
+        setSelectedGuesses(
+          {}
+        );
+
+        setRoundSubmitted(
+          false
+        );
+
         setMatchResult(
           null
         );
 
-        const updateTimer =
-          () => {
-            const remaining =
-              data.endsAt -
-              Date.now();
+        setSecondsLeft(
+          10
+        );
 
-            setSecondsLeft(
-              Math.max(
-                0,
-                Math.ceil(
-                  remaining /
-                    1000
-                )
-              )
-            );
-          };
+        autoSubmittedRef.current =
+          false;
+      };
 
-        updateTimer();
-
-        const interval =
-          window.setInterval(
-            updateTimer,
-            200
-          );
-
-        window.setTimeout(
-          () => {
-            window.clearInterval(
-              interval
-            );
-          },
-          11000
+    const handleVotingProgress =
+      (data: {
+        submitted: number;
+        total: number;
+      }) => {
+        setVotingProgress(
+          data
         );
       };
 
@@ -303,16 +375,9 @@ function App() {
         votesB: number;
         winner: Opinion;
       }) => {
-        setMatchResult({
-          votesA:
-            data.votesA,
-
-          votesB:
-            data.votesB,
-
-          winner:
-            data.winner,
-        });
+        setMatchResult(
+          data
+        );
       };
 
     const handleScoresUpdated =
@@ -391,6 +456,11 @@ function App() {
     );
 
     socket.on(
+      "voting-progress",
+      handleVotingProgress
+    );
+
+    socket.on(
       "match-result",
       handleMatchResult
     );
@@ -432,6 +502,11 @@ function App() {
       );
 
       socket.off(
+        "voting-progress",
+        handleVotingProgress
+      );
+
+      socket.off(
         "match-result",
         handleMatchResult
       );
@@ -460,8 +535,6 @@ function App() {
 
   const handleHostGame =
     () => {
-      setErrorMessage("");
-
       socket.emit(
         "create-room",
         (response: {
@@ -526,7 +599,7 @@ function App() {
           ) {
             setErrorMessage(
               response.message ??
-                "Unable to join room."
+                "Unable to join."
             );
 
             return;
@@ -563,7 +636,7 @@ function App() {
           ) {
             setErrorMessage(
               response.message ??
-                "Unable to start game."
+                "Unable to start."
             );
           }
         }
@@ -602,8 +675,6 @@ function App() {
 
   const handleSubmitOpinions =
     () => {
-      setErrorMessage("");
-
       const opinions = [
         opinionOne,
         opinionTwo,
@@ -628,7 +699,7 @@ function App() {
           ) {
             setErrorMessage(
               response.message ??
-                "Unable to submit opinions."
+                "Unable to submit."
             );
 
             return;
@@ -641,93 +712,88 @@ function App() {
       );
     };
 
-  const handleVote = (
-    opinionId: string
-  ) => {
-    if (selectedVote) {
+  function submitCurrentRound(
+    automatic = false
+  ) {
+    if (
+      !selectedVote ||
+      roundSubmitted
+    ) {
       return;
     }
 
-    setSelectedVote(
-      opinionId
-    );
+    setRoundSubmitted(true);
 
     socket.emit(
-      "submit-vote",
+      "submit-round",
       {
         roomCode:
           joinedRoomCode,
 
-        opinionId,
+        opinionId:
+          selectedVote,
+
+        guesses:
+          selectedGuesses,
+      },
+
+      (response: {
+        success: boolean;
+        message?: string;
+        guessResults?: Array<{
+          opinionId: string;
+          correct: boolean;
+          points: number;
+        }>;
+      }) => {
+        if (
+          !response.success
+        ) {
+          if (!automatic) {
+            setErrorMessage(
+              response.message ??
+                "Unable to submit."
+            );
+          }
+        }
+      }
+    );
+  }
+
+  const toggleGuess = (
+    opinionId: string,
+    playerId: string
+  ) => {
+    if (roundSubmitted) {
+      return;
+    }
+
+    setSelectedGuesses(
+      (current) => {
+        if (
+          current[
+            opinionId
+          ] === playerId
+        ) {
+          const updated = {
+            ...current,
+          };
+
+          delete updated[
+            opinionId
+          ];
+
+          return updated;
+        }
+
+        return {
+          ...current,
+          [opinionId]:
+            playerId,
+        };
       }
     );
   };
-
-  const handleGuessAuthor =
-    (
-      opinion: Opinion
-    ) => {
-      const guessedPlayerId =
-        guessSelections[
-          opinion.id
-        ];
-
-      if (
-        !guessedPlayerId
-      ) {
-        return;
-      }
-
-      socket.emit(
-        "guess-author",
-        {
-          roomCode:
-            joinedRoomCode,
-
-          opinionId:
-            opinion.id,
-
-          guessedPlayerId,
-        },
-
-        (response: {
-          success: boolean;
-          correct?: boolean;
-          points?: number;
-          message?: string;
-        }) => {
-          if (
-            !response.success
-          ) {
-            alert(
-              response.message ??
-                "Unable to guess."
-            );
-
-            return;
-          }
-
-          setGuessResults(
-            (current) => ({
-              ...current,
-
-              [opinion.id]: {
-                submitted:
-                  true,
-
-                correct:
-                  response.correct ??
-                  false,
-
-                points:
-                  response.points ??
-                  0,
-              },
-            })
-          );
-        }
-      );
-    };
 
   const toggleAuthors =
     () => {
@@ -748,75 +814,23 @@ function App() {
   const isHost =
     Boolean(hostRoomCode);
 
-  const renderGuessBox = (
+  const renderPlayerChips = (
     opinion: Opinion
   ) => {
-    if (isHost) {
+    if (
+      opinion.isFiller ||
+      isHost
+    ) {
       return null;
     }
 
-    if (
-      opinion.isFiller
-    ) {
-      return (
-        <div className="guess-box filler-label">
-          Game generated
-        </div>
-      );
-    }
-
-    const result =
-      guessResults[
-        opinion.id
-      ];
-
-    if (result?.submitted) {
-      return (
-        <div
-          className={`guess-result ${
-            result.correct
-              ? "guess-correct"
-              : "guess-wrong"
-          }`}
-        >
-          {result.correct
-            ? `Correct! +${result.points}`
-            : "Wrong guess"}
-        </div>
-      );
-    }
-
     return (
-      <div className="guess-box">
-        <span className="guess-title">
-          Who wrote this?
+      <div className="guess-area">
+        <span className="guess-caption">
+          Optional: who wrote this?
         </span>
 
-        <select
-          className="guess-select"
-          value={
-            guessSelections[
-              opinion.id
-            ] ?? ""
-          }
-          onChange={(
-            event
-          ) =>
-            setGuessSelections(
-              (current) => ({
-                ...current,
-
-                [opinion.id]:
-                  event.target
-                    .value,
-              })
-            )
-          }
-        >
-          <option value="">
-            Choose player
-          </option>
-
+        <div className="player-chips">
           {players
             .filter(
               (player) =>
@@ -824,33 +838,42 @@ function App() {
                 socket.id
             )
             .map(
-              (player) => (
-                <option
-                  key={
-                    player.id
-                  }
-                  value={
-                    player.id
-                  }
-                >
-                  {
-                    player.name
-                  }
-                </option>
-              )
-            )}
-        </select>
+              (player) => {
+                const selected =
+                  selectedGuesses[
+                    opinion.id
+                  ] ===
+                  player.id;
 
-        <button
-          className="guess-button"
-          onClick={() =>
-            handleGuessAuthor(
-              opinion
-            )
-          }
-        >
-          Lock Guess
-        </button>
+                return (
+                  <button
+                    type="button"
+                    key={
+                      player.id
+                    }
+                    className={`player-chip ${
+                      selected
+                        ? "player-chip-selected"
+                        : ""
+                    }`}
+                    onClick={() =>
+                      toggleGuess(
+                        opinion.id,
+                        player.id
+                      )
+                    }
+                    disabled={
+                      roundSubmitted
+                    }
+                  >
+                    {
+                      player.name
+                    }
+                  </button>
+                );
+              }
+            )}
+        </div>
       </div>
     );
   };
@@ -865,8 +888,7 @@ function App() {
         <section className="results-card">
           <div className="winner-section">
             <p className="subtitle">
-              Most Unpopular
-              Opinion
+              Most Unpopular Opinion
             </p>
 
             <div className="winner-trophy">
@@ -891,8 +913,7 @@ function App() {
           <div className="results-grid">
             <div className="results-panel">
               <h2>
-                🔥 Hot Take
-                Rankings
+                🔥 Hot Take Rankings
               </h2>
 
               <div className="ranking-list">
@@ -920,18 +941,6 @@ function App() {
                           }
                         </strong>
 
-                        <span>
-                          {
-                            opinion.wins
-                          }{" "}
-                          matchup
-                          {opinion.wins ===
-                          1
-                            ? ""
-                            : "s"}{" "}
-                          won
-                        </span>
-
                         {revealAuthors && (
                           <span className="ranking-author">
                             {opinion.isFiller
@@ -948,54 +957,51 @@ function App() {
 
             <div className="results-panel">
               <h2>
-                🏅 Player
-                Leaderboard
+                🏅 Player Leaderboard
               </h2>
 
-              <div className="ranking-list">
-                {finalPlayers.map(
-                  (
-                    player,
-                    index
-                  ) => (
-                    <div
-                      className="player-score-row"
-                      key={
-                        player.id
-                      }
-                    >
-                      <span className="player-position">
-                        {index ===
-                        0
-                          ? "🥇"
-                          : index ===
+              {finalPlayers.map(
+                (
+                  player,
+                  index
+                ) => (
+                  <div
+                    className="player-score-row"
+                    key={
+                      player.id
+                    }
+                  >
+                    <span>
+                      {index ===
+                      0
+                        ? "🥇"
+                        : index ===
+                          1
+                        ? "🥈"
+                        : index ===
+                          2
+                        ? "🥉"
+                        : `#${
+                            index +
                             1
-                          ? "🥈"
-                          : index ===
-                            2
-                          ? "🥉"
-                          : `#${
-                              index +
-                              1
-                            }`}
-                      </span>
+                          }`}
+                    </span>
 
-                      <span className="score-name">
-                        {
-                          player.name
-                        }
-                      </span>
+                    <span className="score-name">
+                      {
+                        player.name
+                      }
+                    </span>
 
-                      <strong className="score-points">
-                        {
-                          player.score
-                        }{" "}
-                        pts
-                      </strong>
-                    </div>
-                  )
-                )}
-              </div>
+                    <strong className="score-points">
+                      {
+                        player.score
+                      }{" "}
+                      pts
+                    </strong>
+                  </div>
+                )
+              )}
             </div>
           </div>
 
@@ -1021,120 +1027,181 @@ function App() {
       "voting" &&
     currentMatch
   ) {
+    const roundName =
+      getRoundName(
+        currentMatch.roundNumber,
+        currentMatch.totalOpinions
+      );
+
     return (
       <main className="app-shell">
-        <section className="game-card vote-card">
-          <p className="subtitle">
-            Round{" "}
-            {
-              currentMatch.roundNumber
-            }
-          </p>
+        <section className="battle-card">
+          <div className="battle-header">
+            <div>
+              <span className="round-pill">
+                {roundName}
+              </span>
 
-          <div className="timer">
-            {secondsLeft}
+              {isHost && (
+                <div className="votes-progress">
+                  {
+                    votingProgress.submitted
+                  }{" "}
+                  /{" "}
+                  {
+                    votingProgress.total
+                  }{" "}
+                  submitted
+                </div>
+              )}
+            </div>
+
+            <div
+              className={`countdown ${
+                secondsLeft <=
+                3
+                  ? "countdown-danger"
+                  : ""
+              }`}
+            >
+              {
+                secondsLeft
+              }
+            </div>
           </div>
 
-          <p className="vote-instruction">
-            Which is the more
-            unpopular opinion?
+          <p className="battle-question">
+            Which is the more unpopular opinion?
           </p>
 
-          <button
-            className={`opinion-choice opinion-a ${
-              selectedVote ===
-              currentMatch
-                .opinionA.id
-                ? "selected-choice"
-                : ""
-            }`}
-            onClick={() =>
-              !isHost &&
-              handleVote(
+          <div className="battle-options">
+            <div
+              className={`battle-option option-purple ${
+                selectedVote ===
                 currentMatch
                   .opinionA.id
-              )
-            }
-            disabled={
-              isHost ||
-              !!selectedVote
-            }
-          >
-            {
-              currentMatch
-                .opinionA.text
-            }
-          </button>
+                  ? "battle-option-selected"
+                  : ""
+              }`}
+              onClick={() => {
+                if (
+                  !isHost &&
+                  !roundSubmitted
+                ) {
+                  setSelectedVote(
+                    currentMatch
+                      .opinionA.id
+                  );
+                }
+              }}
+            >
+              <div className="option-letter">
+                A
+              </div>
 
-          {renderGuessBox(
-            currentMatch.opinionA
-          )}
+              <div className="battle-option-text">
+                {
+                  currentMatch
+                    .opinionA.text
+                }
+              </div>
 
-          <div className="versus">
-            VS
-          </div>
+              {renderPlayerChips(
+                currentMatch.opinionA
+              )}
+            </div>
 
-          <button
-            className={`opinion-choice opinion-b ${
-              selectedVote ===
-              currentMatch
-                .opinionB.id
-                ? "selected-choice"
-                : ""
-            }`}
-            onClick={() =>
-              !isHost &&
-              handleVote(
+            <div className="vs-badge">
+              VS
+            </div>
+
+            <div
+              className={`battle-option option-blue ${
+                selectedVote ===
                 currentMatch
                   .opinionB.id
-              )
-            }
-            disabled={
-              isHost ||
-              !!selectedVote
-            }
-          >
-            {
-              currentMatch
-                .opinionB.text
-            }
-          </button>
+                  ? "battle-option-selected"
+                  : ""
+              }`}
+              onClick={() => {
+                if (
+                  !isHost &&
+                  !roundSubmitted
+                ) {
+                  setSelectedVote(
+                    currentMatch
+                      .opinionB.id
+                  );
+                }
+              }}
+            >
+              <div className="option-letter">
+                B
+              </div>
 
-          {renderGuessBox(
-            currentMatch.opinionB
-          )}
+              <div className="battle-option-text">
+                {
+                  currentMatch
+                    .opinionB.text
+                }
+              </div>
+
+              {renderPlayerChips(
+                currentMatch.opinionB
+              )}
+            </div>
+          </div>
 
           {!isHost &&
-            selectedVote &&
+            !roundSubmitted &&
             !matchResult && (
-              <p className="locked-message">
-                ✓ Vote locked in
-              </p>
+              <button
+                className="submit-round-button"
+                disabled={
+                  !selectedVote
+                }
+                onClick={() =>
+                  submitCurrentRound()
+                }
+              >
+                {selectedVote
+                  ? "Submit Choice"
+                  : "Choose A or B"}
+              </button>
             )}
 
-          {isHost &&
+          {!isHost &&
+            roundSubmitted &&
             !matchResult && (
-              <p className="host-display-message">
-                Players are
-                voting...
+              <div className="submitted-banner">
+                ✓ Submitted
+              </div>
+            )}
+
+          {!isHost &&
+            !roundSubmitted &&
+            selectedVote &&
+            secondsLeft <=
+              3 && (
+              <p className="auto-submit-message">
+                Your current selection will automatically submit when time runs out.
               </p>
             )}
 
           {matchResult && (
-            <div className="match-result">
-              <p className="result-score">
+            <div className="round-result-overlay">
+              <span className="result-small">
                 {
                   matchResult.votesA
                 }{" "}
-                -{" "}
+                –{" "}
                 {
                   matchResult.votesB
                 }
-              </p>
+              </span>
 
-              <span>
-                Advances to the
-                next round
+              <span className="result-small">
+                Advances
               </span>
 
               <strong>
@@ -1160,13 +1227,8 @@ function App() {
           <div className="loading-ring" />
 
           <h2>
-            Building the
-            bracket...
+            Building the bracket...
           </h2>
-
-          <p className="subtitle">
-            Get ready
-          </p>
         </section>
       </main>
     );
@@ -1181,25 +1243,16 @@ function App() {
       <main className="app-shell">
         <section className="game-card">
           <p className="subtitle">
-            Collecting Hot
-            Takes
+            Collecting Hot Takes
           </p>
 
           <h1>
-            {
-              hostRoomCode
-            }
+            {hostRoomCode}
           </h1>
 
           <p className="submission-counter">
             {submittedCount} /{" "}
-            {
-              players.length
-            }
-          </p>
-
-          <p className="subtitle">
-            Players submitted
+            {players.length}
           </p>
 
           <div className="player-list">
@@ -1244,20 +1297,13 @@ function App() {
           </p>
 
           <h1>
-            {
-              hostRoomCode
-            }
+            {hostRoomCode}
           </h1>
 
           <div className="qr-container">
             <QRCodeSVG
-              value={
-                joinUrl
-              }
+              value={joinUrl}
               size={210}
-              bgColor="#ffffff"
-              fgColor="#111111"
-              level="M"
               includeMargin
             />
           </div>
@@ -1266,38 +1312,19 @@ function App() {
             Scan to join
           </p>
 
-          <p className="subtitle">
-            {
-              players.length
-            }{" "}
-            {players.length ===
-            1
-              ? "player"
-              : "players"}{" "}
-            joined
-          </p>
-
           <div className="player-list">
-            {players.length ===
-            0 ? (
-              <p className="empty-message">
-                Waiting for
-                players...
-              </p>
-            ) : (
-              players.map(
-                (player) => (
-                  <div
-                    className="player-pill"
-                    key={
-                      player.id
-                    }
-                  >
-                    {
-                      player.name
-                    }
-                  </div>
-                )
+            {players.map(
+              (player) => (
+                <div
+                  className="player-pill"
+                  key={
+                    player.id
+                  }
+                >
+                  {
+                    player.name
+                  }
+                </div>
               )
             )}
           </div>
@@ -1314,14 +1341,6 @@ function App() {
           >
             Start Game
           </button>
-
-          {errorMessage && (
-            <p className="error-message">
-              {
-                errorMessage
-              }
-            </p>
-          )}
         </section>
       </main>
     );
@@ -1343,14 +1362,8 @@ function App() {
             </div>
 
             <h2>
-              Hot takes
-              submitted!
+              Hot takes submitted!
             </h2>
-
-            <p className="subtitle">
-              Waiting for
-              everyone else...
-            </p>
           </section>
         </main>
       );
@@ -1360,14 +1373,11 @@ function App() {
       <main className="app-shell">
         <section className="game-card">
           <p className="subtitle">
-            Submit Your Hot
-            Takes
+            Submit Your Hot Takes
           </p>
 
           <h2 className="section-title">
-            Give us at least
-            2 unpopular
-            opinions
+            Give us at least 2
           </h2>
 
           <textarea
@@ -1405,26 +1415,17 @@ function App() {
             ) => (
               <textarea
                 className="opinion-input"
-                key={
-                  index
-                }
+                key={index}
                 placeholder={`Hot take #${
                   index + 3
                 }`}
                 value={
                   opinion
                 }
-                maxLength={
-                  160
-                }
-                onChange={(
-                  event
-                ) =>
+                onChange={(event) =>
                   updateExtraOpinion(
                     index,
-                    event
-                      .target
-                      .value
+                    event.target.value
                   )
                 }
               />
@@ -1448,14 +1449,6 @@ function App() {
           >
             Submit Hot Takes
           </button>
-
-          {errorMessage && (
-            <p className="error-message">
-              {
-                errorMessage
-              }
-            </p>
-          )}
         </section>
       </main>
     );
@@ -1470,23 +1463,18 @@ function App() {
           </p>
 
           <h1>
-            {
-              joinedRoomCode
-            }
+            {joinedRoomCode}
           </h1>
 
-          <p className="welcome-text">
+          <p>
             Welcome,{" "}
             <strong>
-              {
-                playerName
-              }
+              {playerName}
             </strong>
           </p>
 
           <p className="subtitle">
-            Waiting for the
-            host to start...
+            Waiting for host...
           </p>
         </section>
       </main>
@@ -1501,8 +1489,7 @@ function App() {
         </h1>
 
         <p className="subtitle">
-          Unpopular Opinion
-          Battle
+          Unpopular Opinion Battle
         </p>
 
         <button
@@ -1558,9 +1545,7 @@ function App() {
 
         {errorMessage && (
           <p className="error-message">
-            {
-              errorMessage
-            }
+            {errorMessage}
           </p>
         )}
       </section>

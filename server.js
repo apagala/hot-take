@@ -34,6 +34,7 @@ const fillerOpinions = [
 
 function generateRoomCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
   let code = "";
 
   for (let i = 0; i < 4; i++) {
@@ -48,6 +49,7 @@ function shuffleArray(array) {
 
   for (let i = copy.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
+
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
 
@@ -76,7 +78,9 @@ function publicPlayers(room) {
 function emitRoomUpdate(roomCode) {
   const room = rooms.get(roomCode);
 
-  if (!room) return;
+  if (!room) {
+    return;
+  }
 
   io.to(roomCode).emit("room-updated", {
     roomCode,
@@ -107,18 +111,96 @@ function getGuessPoints(correctPosition) {
   return 100;
 }
 
+function processAuthorGuess(
+  room,
+  player,
+  opinionId,
+  guessedPlayerId
+) {
+  if (!guessedPlayerId) {
+    return null;
+  }
+
+  const opinion = room.tournamentOpinions.find(
+    (item) => item.id === opinionId
+  );
+
+  if (!opinion || opinion.isFiller) {
+    return null;
+  }
+
+  if (opinion.authorId === player.id) {
+    return {
+      success: false,
+      opinionId,
+      message: "You can't guess yourself.",
+    };
+  }
+
+  room.authorGuesses[opinionId] ??= {};
+
+  if (room.authorGuesses[opinionId][player.id]) {
+    return null;
+  }
+
+  const guessedPlayer = room.players.find(
+    (item) => item.id === guessedPlayerId
+  );
+
+  if (!guessedPlayer) {
+    return null;
+  }
+
+  const correct =
+    guessedPlayerId === opinion.authorId;
+
+  let points = 0;
+
+  if (correct) {
+    room.correctGuessCounts[opinionId] ??= 0;
+
+    room.correctGuessCounts[opinionId] += 1;
+
+    points = getGuessPoints(
+      room.correctGuessCounts[opinionId]
+    );
+
+    player.score += points;
+  }
+
+  room.authorGuesses[opinionId][player.id] = {
+    guessedPlayerId,
+    correct,
+    points,
+  };
+
+  return {
+    success: true,
+    opinionId,
+    correct,
+    points,
+  };
+}
+
 function createTournament(room) {
   let opinions = [...room.opinions];
 
-  const requiredCount = nextPowerOfTwo(opinions.length);
-  const fillerNeeded = requiredCount - opinions.length;
+  const requiredCount =
+    nextPowerOfTwo(opinions.length);
 
-  const shuffledFillers = shuffleArray(fillerOpinions);
+  const fillerNeeded =
+    requiredCount - opinions.length;
+
+  const shuffledFillers =
+    shuffleArray(fillerOpinions);
 
   for (let i = 0; i < fillerNeeded; i++) {
     opinions.push({
       id: `filler-${Date.now()}-${i}`,
-      text: shuffledFillers[i % shuffledFillers.length],
+      text:
+        shuffledFillers[
+          i % shuffledFillers.length
+        ],
       authorId: null,
       authorName: "Game Generated",
       isFiller: true,
@@ -130,6 +212,7 @@ function createTournament(room) {
   opinions = shuffleArray(opinions);
 
   room.tournamentOpinions = opinions;
+  room.totalTournamentOpinions = opinions.length;
 
   room.currentRound = opinions;
   room.nextRound = [];
@@ -140,9 +223,16 @@ function createTournament(room) {
 }
 
 function startCurrentMatch(room) {
-  if (room.currentMatchIndex >= room.currentRound.length) {
+  if (
+    room.currentMatchIndex >=
+    room.currentRound.length
+  ) {
     if (room.nextRound.length === 1) {
-      finishTournament(room, room.nextRound[0]);
+      finishTournament(
+        room,
+        room.nextRound[0]
+      );
+
       return;
     }
 
@@ -152,41 +242,89 @@ function startCurrentMatch(room) {
     room.roundNumber += 1;
 
     startCurrentMatch(room);
+
     return;
   }
 
   const opinionA =
-    room.currentRound[room.currentMatchIndex];
+    room.currentRound[
+      room.currentMatchIndex
+    ];
 
   const opinionB =
-    room.currentRound[room.currentMatchIndex + 1];
+    room.currentRound[
+      room.currentMatchIndex + 1
+    ];
 
   room.matchFinishing = false;
 
   room.currentMatch = {
     opinionA,
     opinionB,
+
     votes: {},
-    endsAt: Date.now() + 10000,
+
+    submittedPlayers:
+      new Set(),
+
+    endsAt:
+      Date.now() + 10000,
   };
 
   room.gameState = "voting";
 
-  io.to(room.roomCode).emit("match-started", {
-    opinionA,
-    opinionB,
-    roundNumber: room.roundNumber,
-    matchIndex: room.currentMatchIndex / 2,
-    endsAt: room.currentMatch.endsAt,
-  });
+  io.to(room.roomCode).emit(
+    "match-started",
+    {
+      opinionA,
+      opinionB,
 
-  room.matchTimer = setTimeout(() => {
-    finishCurrentMatch(room);
-  }, 10000);
+      roundNumber:
+        room.roundNumber,
+
+      matchIndex:
+        room.currentMatchIndex /
+        2,
+
+      totalOpinions:
+        room.totalTournamentOpinions,
+
+      endsAt:
+        room.currentMatch.endsAt,
+    }
+  );
+
+  emitVotingProgress(room);
+
+  room.matchTimer =
+    setTimeout(() => {
+      finishCurrentMatch(room);
+    }, 10000);
+}
+
+function emitVotingProgress(room) {
+  if (!room.currentMatch) {
+    return;
+  }
+
+  io.to(room.roomCode).emit(
+    "voting-progress",
+    {
+      submitted:
+        room.currentMatch
+          .submittedPlayers.size,
+
+      total:
+        room.players.length,
+    }
+  );
 }
 
 function finishCurrentMatch(room) {
-  if (!room.currentMatch || room.matchFinishing) {
+  if (
+    !room.currentMatch ||
+    room.matchFinishing
+  ) {
     return;
   }
 
@@ -194,8 +332,11 @@ function finishCurrentMatch(room) {
 
   clearTimeout(room.matchTimer);
 
-  const { opinionA, opinionB, votes } =
-    room.currentMatch;
+  const {
+    opinionA,
+    opinionB,
+    votes,
+  } = room.currentMatch;
 
   let votesA = 0;
   let votesB = 0;
@@ -230,13 +371,16 @@ function finishCurrentMatch(room) {
 
   room.nextRound.push(winner);
 
-  io.to(room.roomCode).emit("match-result", {
-    opinionA,
-    opinionB,
-    votesA,
-    votesB,
-    winner,
-  });
+  io.to(room.roomCode).emit(
+    "match-result",
+    {
+      opinionA,
+      opinionB,
+      votesA,
+      votesB,
+      winner,
+    }
+  );
 
   room.currentMatchIndex += 2;
 
@@ -245,42 +389,57 @@ function finishCurrentMatch(room) {
   }, 2500);
 }
 
-function finishTournament(room, winner) {
+function finishTournament(
+  room,
+  winner
+) {
   room.gameState = "finished";
   room.winner = winner;
 
-  const rankings = [...room.tournamentOpinions].sort(
-    (a, b) => {
-      if (b.wins !== a.wins) {
-        return b.wins - a.wins;
-      }
-
-      return b.totalVotes - a.totalVotes;
+  const rankings = [
+    ...room.tournamentOpinions,
+  ].sort((a, b) => {
+    if (b.wins !== a.wins) {
+      return b.wins - a.wins;
     }
-  );
 
-  const players = [...publicPlayers(room)].sort(
+    return (
+      b.totalVotes -
+      a.totalVotes
+    );
+  });
+
+  const players = [
+    ...publicPlayers(room),
+  ].sort(
     (a, b) => b.score - a.score
   );
 
   room.finalRankings = rankings;
 
-  io.to(room.roomCode).emit("game-finished", {
-    winner,
-    rankings,
-    players,
-    revealAuthors: room.revealAuthors,
-  });
+  io.to(room.roomCode).emit(
+    "game-finished",
+    {
+      winner,
+      rankings,
+      players,
+      revealAuthors:
+        room.revealAuthors,
+    }
+  );
 }
 
 function maybeStartTournament(room) {
   const allSubmitted =
     room.players.length > 0 &&
     room.players.every(
-      (player) => player.hasSubmitted
+      (player) =>
+        player.hasSubmitted
     );
 
-  if (!allSubmitted) return;
+  if (!allSubmitted) {
+    return;
+  }
 
   room.gameState = "preparing";
 
@@ -298,67 +457,71 @@ function maybeStartTournament(room) {
 
 io.on("connection", (socket) => {
   console.log(
-    "Player connected:",
+    "Connected:",
     socket.id
   );
 
-  socket.on("create-room", (callback) => {
-    let roomCode;
+  socket.on(
+    "create-room",
+    (callback) => {
+      let roomCode;
 
-    do {
-      roomCode =
-        generateRoomCode();
-    } while (
-      rooms.has(roomCode)
-    );
+      do {
+        roomCode =
+          generateRoomCode();
+      } while (
+        rooms.has(roomCode)
+      );
 
-    const room = {
-      roomCode,
-      hostSocketId: socket.id,
+      const room = {
+        roomCode,
 
-      gameState: "lobby",
+        hostSocketId:
+          socket.id,
 
-      players: [],
-      opinions: [],
+        gameState:
+          "lobby",
 
-      tournamentOpinions: [],
+        players: [],
+        opinions: [],
 
-      currentRound: [],
-      nextRound: [],
+        tournamentOpinions: [],
+        totalTournamentOpinions:
+          0,
 
-      currentMatchIndex: 0,
-      currentMatch: null,
+        currentRound: [],
+        nextRound: [],
 
-      roundNumber: 0,
+        currentMatchIndex: 0,
+        currentMatch: null,
 
-      matchTimer: null,
-      matchFinishing: false,
+        roundNumber: 0,
 
-      winner: null,
-      finalRankings: [],
+        matchTimer: null,
+        matchFinishing: false,
 
-      authorGuesses: {},
-      correctGuessCounts: {},
+        winner: null,
+        finalRankings: [],
 
-      revealAuthors: false,
-    };
+        authorGuesses: {},
+        correctGuessCounts: {},
 
-    rooms.set(
-      roomCode,
-      room
-    );
+        revealAuthors: false,
+      };
 
-    socket.join(roomCode);
+      rooms.set(
+        roomCode,
+        room
+      );
 
-    console.log(
-      `Room created: ${roomCode}`
-    );
+      socket.join(roomCode);
 
-    callback({
-      success: true,
-      roomCode,
-    });
-  });
+      callback({
+        success: true,
+        roomCode,
+      });
+    }
+  );
 
   socket.on(
     "join-room",
@@ -448,10 +611,6 @@ io.on("connection", (socket) => {
         players:
           publicPlayers(room),
       });
-
-      console.log(
-        `${cleanName} joined ${code}`
-      );
     }
   );
 
@@ -481,7 +640,7 @@ io.on("connection", (socket) => {
         callback?.({
           success: false,
           message:
-            "Only the host can start the game",
+            "Only the host can start",
         });
 
         return;
@@ -494,7 +653,7 @@ io.on("connection", (socket) => {
         callback?.({
           success: false,
           message:
-            "At least one player must join first",
+            "At least one player must join",
         });
 
         return;
@@ -511,9 +670,7 @@ io.on("connection", (socket) => {
         }
       );
 
-      emitRoomUpdate(
-        roomCode
-      );
+      emitRoomUpdate(roomCode);
 
       callback?.({
         success: true,
@@ -586,13 +743,16 @@ io.on("connection", (socket) => {
         callback?.({
           success: false,
           message:
-            "You have already submitted",
+            "Already submitted",
         });
 
         return;
       }
 
-      for (const opinion of cleanedOpinions) {
+      for (
+        const opinion of
+        cleanedOpinions
+      ) {
         room.opinions.push({
           id: `${socket.id}-${Date.now()}-${Math.random()}`,
 
@@ -614,9 +774,7 @@ io.on("connection", (socket) => {
       player.hasSubmitted =
         true;
 
-      emitRoomUpdate(
-        roomCode
-      );
+      emitRoomUpdate(roomCode);
 
       callback?.({
         success: true,
@@ -629,11 +787,12 @@ io.on("connection", (socket) => {
   );
 
   socket.on(
-    "submit-vote",
+    "submit-round",
     (
       {
         roomCode,
         opinionId,
+        guesses,
       },
       callback
     ) => {
@@ -650,77 +809,7 @@ io.on("connection", (socket) => {
         callback?.({
           success: false,
           message:
-            "Voting is not active",
-        });
-
-        return;
-      }
-
-      const validIds = [
-        room.currentMatch
-          .opinionA.id,
-
-        room.currentMatch
-          .opinionB.id,
-      ];
-
-      if (
-        !validIds.includes(
-          opinionId
-        )
-      ) {
-        callback?.({
-          success: false,
-          message:
-            "Invalid opinion",
-        });
-
-        return;
-      }
-
-      room.currentMatch.votes[
-        socket.id
-      ] = opinionId;
-
-      callback?.({
-        success: true,
-      });
-
-      const playerVotes =
-        Object.keys(
-          room.currentMatch
-            .votes
-        ).length;
-
-      if (
-        playerVotes >=
-        room.players.length
-      ) {
-        finishCurrentMatch(
-          room
-        );
-      }
-    }
-  );
-
-  socket.on(
-    "guess-author",
-    (
-      {
-        roomCode,
-        opinionId,
-        guessedPlayerId,
-      },
-      callback
-    ) => {
-      const room =
-        rooms.get(roomCode);
-
-      if (!room) {
-        callback?.({
-          success: false,
-          message:
-            "Room not found",
+            "Voting is closed",
         });
 
         return;
@@ -743,128 +832,105 @@ io.on("connection", (socket) => {
         return;
       }
 
-      const opinion =
-        room.tournamentOpinions.find(
-          (item) =>
-            item.id ===
-            opinionId
-        );
-
-      if (!opinion) {
+      if (
+        room.currentMatch
+          .submittedPlayers.has(
+            socket.id
+          )
+      ) {
         callback?.({
           success: false,
           message:
-            "Opinion not found",
+            "Already submitted",
         });
 
         return;
       }
 
-      if (opinion.isFiller) {
-        callback?.({
-          success: false,
-          message:
-            "This is a game-generated opinion",
-        });
+      const validOpinionIds = [
+        room.currentMatch
+          .opinionA.id,
 
-        return;
-      }
+        room.currentMatch
+          .opinionB.id,
+      ];
 
       if (
-        opinion.authorId ===
+        !validOpinionIds.includes(
+          opinionId
+        )
+      ) {
+        callback?.({
+          success: false,
+          message:
+            "Choose an opinion",
+        });
+
+        return;
+      }
+
+      room.currentMatch.votes[
         socket.id
-      ) {
-        callback?.({
-          success: false,
-          message:
-            "You can't guess your own opinion",
-        });
+      ] = opinionId;
 
-        return;
-      }
-
-      room.authorGuesses[
-        opinionId
-      ] ??= {};
-
-      if (
-        room.authorGuesses[
-          opinionId
-        ][socket.id]
-      ) {
-        callback?.({
-          success: false,
-          message:
-            "You already guessed this opinion",
-        });
-
-        return;
-      }
-
-      const guessedPlayer =
-        room.players.find(
-          (item) =>
-            item.id ===
-            guessedPlayerId
+      room.currentMatch
+        .submittedPlayers.add(
+          socket.id
         );
 
-      if (!guessedPlayer) {
-        callback?.({
-          success: false,
-          message:
-            "Player not found",
-        });
+      const guessResults = [];
 
-        return;
+      if (guesses) {
+        for (
+          const [
+            guessedOpinionId,
+            guessedPlayerId,
+          ] of Object.entries(
+            guesses
+          )
+        ) {
+          if (
+            !validOpinionIds.includes(
+              guessedOpinionId
+            )
+          ) {
+            continue;
+          }
+
+          const result =
+            processAuthorGuess(
+              room,
+              player,
+              guessedOpinionId,
+              guessedPlayerId
+            );
+
+          if (result) {
+            guessResults.push(
+              result
+            );
+          }
+        }
       }
-
-      const correct =
-        guessedPlayerId ===
-        opinion.authorId;
-
-      let points = 0;
-      let correctPosition =
-        null;
-
-      if (correct) {
-        room.correctGuessCounts[
-          opinionId
-        ] ??= 0;
-
-        room.correctGuessCounts[
-          opinionId
-        ] += 1;
-
-        correctPosition =
-          room.correctGuessCounts[
-            opinionId
-          ];
-
-        points =
-          getGuessPoints(
-            correctPosition
-          );
-
-        player.score +=
-          points;
-      }
-
-      room.authorGuesses[
-        opinionId
-      ][socket.id] = {
-        guessedPlayerId,
-        correct,
-        points,
-      };
 
       emitScores(room);
+      emitVotingProgress(room);
 
       callback?.({
         success: true,
-        correct,
-        points,
-        correctPosition,
+        guessResults,
       });
+
+      if (
+        room.currentMatch
+          .submittedPlayers
+          .size >=
+        room.players.length
+      ) {
+        finishCurrentMatch(
+          room
+        );
+      }
     }
   );
 
@@ -878,10 +944,6 @@ io.on("connection", (socket) => {
         rooms.get(roomCode);
 
       if (!room) {
-        callback?.({
-          success: false,
-        });
-
         return;
       }
 
@@ -889,12 +951,6 @@ io.on("connection", (socket) => {
         room.hostSocketId !==
         socket.id
       ) {
-        callback?.({
-          success: false,
-          message:
-            "Only the host can reveal authors",
-        });
-
         return;
       }
 
@@ -911,8 +967,6 @@ io.on("connection", (socket) => {
 
       callback?.({
         success: true,
-        revealAuthors:
-          room.revealAuthors,
       });
     }
   );
@@ -920,11 +974,6 @@ io.on("connection", (socket) => {
   socket.on(
     "disconnect",
     () => {
-      console.log(
-        "Disconnected:",
-        socket.id
-      );
-
       for (const [
         roomCode,
         room,
@@ -933,23 +982,17 @@ io.on("connection", (socket) => {
           room.hostSocketId ===
           socket.id
         ) {
-          if (
-            room.matchTimer
-          ) {
+          if (room.matchTimer) {
             clearTimeout(
               room.matchTimer
             );
           }
 
-          io.to(
-            roomCode
-          ).emit(
+          io.to(roomCode).emit(
             "room-closed"
           );
 
-          rooms.delete(
-            roomCode
-          );
+          rooms.delete(roomCode);
 
           continue;
         }
@@ -964,6 +1007,14 @@ io.on("connection", (socket) => {
         emitRoomUpdate(
           roomCode
         );
+
+        if (
+          room.currentMatch
+        ) {
+          emitVotingProgress(
+            room
+          );
+        }
       }
     }
   );
