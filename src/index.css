@@ -691,3 +691,47 @@ code {
       1.6rem;
   }
 }
+
+/* =========================
+   SUBMISSION / LOADING SCREEN FIX
+========================= */
+
+.game-card {
+  min-height: 420px;
+  height: auto;
+}
+
+.player-list {
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.player-pill {
+  min-height: 48px;
+  align-items: center;
+}
+
+.submission-counter {
+  line-height: 1.1;
+  margin-bottom: 10px;
+}
+
+/* give the collecting screen more vertical space */
+.app-shell {
+  align-items: center;
+}
+
+/* on smaller phones, let the page scroll instead of clipping */
+@media (max-height: 700px) {
+  .app-shell {
+    align-items: flex-start;
+    overflow-y: auto;
+    padding-top: 20px;
+    padding-bottom: 20px;
+  }
+
+  .game-card {
+    min-height: auto;
+  }
+}

@@ -34,7 +34,6 @@ const fillerOpinions = [
 
 function generateRoomCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-
   let code = "";
 
   for (let i = 0; i < 4; i++) {
@@ -49,7 +48,6 @@ function shuffleArray(array) {
 
   for (let i = copy.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
 
@@ -72,23 +70,26 @@ function publicPlayers(room) {
     name: player.name,
     hasSubmitted: player.hasSubmitted,
     score: player.score,
+    connected: Boolean(player.socketId),
   }));
+}
+
+function getSubmittedCount(room) {
+  return room.players.filter(
+    (player) => player.hasSubmitted
+  ).length;
 }
 
 function emitRoomUpdate(roomCode) {
   const room = rooms.get(roomCode);
 
-  if (!room) {
-    return;
-  }
+  if (!room) return;
 
   io.to(roomCode).emit("room-updated", {
     roomCode,
     players: publicPlayers(room),
     gameState: room.gameState,
-    submittedCount: room.players.filter(
-      (player) => player.hasSubmitted
-    ).length,
+    submittedCount: getSubmittedCount(room),
   });
 }
 
@@ -102,11 +103,21 @@ function emitScores(room) {
   });
 }
 
-function getGuessPoints(correctPosition) {
-  if (correctPosition === 1) return 500;
-  if (correctPosition === 2) return 400;
-  if (correctPosition === 3) return 300;
-  if (correctPosition === 4) return 200;
+function emitVotingProgress(room) {
+  if (!room.currentMatch) return;
+
+  io.to(room.roomCode).emit("voting-progress", {
+    submitted:
+      room.currentMatch.submittedPlayers.size,
+    total: room.players.length,
+  });
+}
+
+function getGuessPoints(position) {
+  if (position === 1) return 500;
+  if (position === 2) return 400;
+  if (position === 3) return 300;
+  if (position === 4) return 200;
 
   return 100;
 }
@@ -121,9 +132,10 @@ function processAuthorGuess(
     return null;
   }
 
-  const opinion = room.tournamentOpinions.find(
-    (item) => item.id === opinionId
-  );
+  const opinion =
+    room.tournamentOpinions.find(
+      (item) => item.id === opinionId
+    );
 
   if (!opinion || opinion.isFiller) {
     return null;
@@ -139,13 +151,16 @@ function processAuthorGuess(
 
   room.authorGuesses[opinionId] ??= {};
 
-  if (room.authorGuesses[opinionId][player.id]) {
+  if (
+    room.authorGuesses[opinionId][player.id]
+  ) {
     return null;
   }
 
-  const guessedPlayer = room.players.find(
-    (item) => item.id === guessedPlayerId
-  );
+  const guessedPlayer =
+    room.players.find(
+      (item) => item.id === guessedPlayerId
+    );
 
   if (!guessedPlayer) {
     return null;
@@ -212,7 +227,8 @@ function createTournament(room) {
   opinions = shuffleArray(opinions);
 
   room.tournamentOpinions = opinions;
-  room.totalTournamentOpinions = opinions.length;
+  room.totalTournamentOpinions =
+    opinions.length;
 
   room.currentRound = opinions;
   room.nextRound = [];
@@ -242,7 +258,6 @@ function startCurrentMatch(room) {
     room.roundNumber += 1;
 
     startCurrentMatch(room);
-
     return;
   }
 
@@ -261,14 +276,9 @@ function startCurrentMatch(room) {
   room.currentMatch = {
     opinionA,
     opinionB,
-
     votes: {},
-
-    submittedPlayers:
-      new Set(),
-
-    endsAt:
-      Date.now() + 10000,
+    submittedPlayers: new Set(),
+    endsAt: Date.now() + 10000,
   };
 
   room.gameState = "voting";
@@ -278,17 +288,11 @@ function startCurrentMatch(room) {
     {
       opinionA,
       opinionB,
-
-      roundNumber:
-        room.roundNumber,
-
+      roundNumber: room.roundNumber,
       matchIndex:
-        room.currentMatchIndex /
-        2,
-
+        room.currentMatchIndex / 2,
       totalOpinions:
         room.totalTournamentOpinions,
-
       endsAt:
         room.currentMatch.endsAt,
     }
@@ -300,24 +304,6 @@ function startCurrentMatch(room) {
     setTimeout(() => {
       finishCurrentMatch(room);
     }, 10000);
-}
-
-function emitVotingProgress(room) {
-  if (!room.currentMatch) {
-    return;
-  }
-
-  io.to(room.roomCode).emit(
-    "voting-progress",
-    {
-      submitted:
-        room.currentMatch
-          .submittedPlayers.size,
-
-      total:
-        room.players.length,
-    }
-  );
 }
 
 function finishCurrentMatch(room) {
@@ -455,6 +441,100 @@ function maybeStartTournament(room) {
   }, 1500);
 }
 
+function buildSessionSnapshot(
+  room,
+  clientId,
+  role
+) {
+  const player =
+    room.players.find(
+      (item) =>
+        item.id === clientId
+    );
+
+  const snapshot = {
+    success: true,
+    role,
+    roomCode: room.roomCode,
+    players: publicPlayers(room),
+    gameState: room.gameState,
+    submittedCount:
+      getSubmittedCount(room),
+    revealAuthors:
+      room.revealAuthors,
+  };
+
+  if (role === "player") {
+    snapshot.playerName =
+      player?.name ?? "";
+
+    snapshot.hasSubmittedOpinions =
+      player?.hasSubmitted ?? false;
+  }
+
+  if (
+    room.gameState === "voting" &&
+    room.currentMatch
+  ) {
+    snapshot.currentMatch = {
+      opinionA:
+        room.currentMatch.opinionA,
+
+      opinionB:
+        room.currentMatch.opinionB,
+
+      roundNumber:
+        room.roundNumber,
+
+      matchIndex:
+        room.currentMatchIndex /
+        2,
+
+      totalOpinions:
+        room.totalTournamentOpinions,
+
+      endsAt:
+        room.currentMatch.endsAt,
+    };
+
+    snapshot.votingProgress = {
+      submitted:
+        room.currentMatch
+          .submittedPlayers.size,
+
+      total:
+        room.players.length,
+    };
+
+    snapshot.roundSubmitted =
+      role === "player"
+        ? room.currentMatch
+            .submittedPlayers.has(
+              clientId
+            )
+        : false;
+  }
+
+  if (
+    room.gameState === "finished"
+  ) {
+    snapshot.winner =
+      room.winner;
+
+    snapshot.rankings =
+      room.finalRankings;
+
+    snapshot.finalPlayers = [
+      ...publicPlayers(room),
+    ].sort(
+      (a, b) =>
+        b.score - a.score
+    );
+  }
+
+  return snapshot;
+}
+
 io.on("connection", (socket) => {
   console.log(
     "Connected:",
@@ -463,7 +543,10 @@ io.on("connection", (socket) => {
 
   socket.on(
     "create-room",
-    (callback) => {
+    (
+      { clientId },
+      callback
+    ) => {
       let roomCode;
 
       do {
@@ -476,8 +559,14 @@ io.on("connection", (socket) => {
       const room = {
         roomCode,
 
+        hostClientId:
+          clientId,
+
         hostSocketId:
           socket.id,
+
+        hostDisconnectTimer:
+          null,
 
         gameState:
           "lobby",
@@ -529,6 +618,7 @@ io.on("connection", (socket) => {
       {
         roomCode,
         playerName,
+        clientId,
       },
       callback
     ) => {
@@ -564,16 +654,6 @@ io.on("connection", (socket) => {
       const cleanName =
         playerName.trim();
 
-      if (!cleanName) {
-        callback({
-          success: false,
-          message:
-            "Enter your name",
-        });
-
-        return;
-      }
-
       const nameExists =
         room.players.some(
           (player) =>
@@ -593,10 +673,12 @@ io.on("connection", (socket) => {
       }
 
       const player = {
-        id: socket.id,
+        id: clientId,
+        socketId: socket.id,
         name: cleanName,
         hasSubmitted: false,
         score: 0,
+        disconnectTimer: null,
       };
 
       room.players.push(player);
@@ -615,6 +697,119 @@ io.on("connection", (socket) => {
   );
 
   socket.on(
+    "resume-session",
+    (
+      {
+        roomCode,
+        clientId,
+        role,
+      },
+      callback
+    ) => {
+      const room =
+        rooms.get(roomCode);
+
+      if (!room) {
+        callback({
+          success: false,
+          message:
+            "Room no longer exists",
+        });
+
+        return;
+      }
+
+      if (role === "host") {
+        if (
+          room.hostClientId !==
+          clientId
+        ) {
+          callback({
+            success: false,
+          });
+
+          return;
+        }
+
+        if (
+          room.hostDisconnectTimer
+        ) {
+          clearTimeout(
+            room.hostDisconnectTimer
+          );
+
+          room.hostDisconnectTimer =
+            null;
+        }
+
+        room.hostSocketId =
+          socket.id;
+
+        socket.join(roomCode);
+
+        callback(
+          buildSessionSnapshot(
+            room,
+            clientId,
+            "host"
+          )
+        );
+
+        emitRoomUpdate(
+          roomCode
+        );
+
+        return;
+      }
+
+      const player =
+        room.players.find(
+          (item) =>
+            item.id ===
+            clientId
+        );
+
+      if (!player) {
+        callback({
+          success: false,
+          message:
+            "Player session not found",
+        });
+
+        return;
+      }
+
+      if (
+        player.disconnectTimer
+      ) {
+        clearTimeout(
+          player.disconnectTimer
+        );
+
+        player.disconnectTimer =
+          null;
+      }
+
+      player.socketId =
+        socket.id;
+
+      socket.join(roomCode);
+
+      callback(
+        buildSessionSnapshot(
+          room,
+          clientId,
+          "player"
+        )
+      );
+
+      emitRoomUpdate(
+        roomCode
+      );
+    }
+  );
+
+  socket.on(
     "start-game",
     (
       { roomCode },
@@ -624,12 +819,6 @@ io.on("connection", (socket) => {
         rooms.get(roomCode);
 
       if (!room) {
-        callback?.({
-          success: false,
-          message:
-            "Room not found",
-        });
-
         return;
       }
 
@@ -640,20 +829,7 @@ io.on("connection", (socket) => {
         callback?.({
           success: false,
           message:
-            "Only the host can start",
-        });
-
-        return;
-      }
-
-      if (
-        room.players.length ===
-        0
-      ) {
-        callback?.({
-          success: false,
-          message:
-            "At least one player must join",
+            "Only host can start",
         });
 
         return;
@@ -683,6 +859,7 @@ io.on("connection", (socket) => {
     (
       {
         roomCode,
+        clientId,
         opinions,
       },
       callback
@@ -690,30 +867,16 @@ io.on("connection", (socket) => {
       const room =
         rooms.get(roomCode);
 
-      if (!room) {
-        callback?.({
-          success: false,
-          message:
-            "Room not found",
-        });
-
-        return;
-      }
+      if (!room) return;
 
       const player =
         room.players.find(
           (item) =>
             item.id ===
-            socket.id
+            clientId
         );
 
       if (!player) {
-        callback?.({
-          success: false,
-          message:
-            "Player not found",
-        });
-
         return;
       }
 
@@ -754,18 +917,13 @@ io.on("connection", (socket) => {
         cleanedOpinions
       ) {
         room.opinions.push({
-          id: `${socket.id}-${Date.now()}-${Math.random()}`,
-
+          id: `${clientId}-${Date.now()}-${Math.random()}`,
           text: opinion,
-
           authorId:
-            socket.id,
-
+            clientId,
           authorName:
             player.name,
-
           isFiller: false,
-
           wins: 0,
           totalVotes: 0,
         });
@@ -791,6 +949,7 @@ io.on("connection", (socket) => {
     (
       {
         roomCode,
+        clientId,
         opinionId,
         guesses,
       },
@@ -801,15 +960,13 @@ io.on("connection", (socket) => {
 
       if (
         !room ||
-        room.gameState !==
-          "voting" ||
         !room.currentMatch ||
         room.matchFinishing
       ) {
         callback?.({
           success: false,
           message:
-            "Voting is closed",
+            "Voting closed",
         });
 
         return;
@@ -819,23 +976,17 @@ io.on("connection", (socket) => {
         room.players.find(
           (item) =>
             item.id ===
-            socket.id
+            clientId
         );
 
       if (!player) {
-        callback?.({
-          success: false,
-          message:
-            "Player not found",
-        });
-
         return;
       }
 
       if (
         room.currentMatch
           .submittedPlayers.has(
-            socket.id
+            clientId
           )
       ) {
         callback?.({
@@ -847,7 +998,7 @@ io.on("connection", (socket) => {
         return;
       }
 
-      const validOpinionIds = [
+      const validIds = [
         room.currentMatch
           .opinionA.id,
 
@@ -856,7 +1007,7 @@ io.on("connection", (socket) => {
       ];
 
       if (
-        !validOpinionIds.includes(
+        !validIds.includes(
           opinionId
         )
       ) {
@@ -870,46 +1021,44 @@ io.on("connection", (socket) => {
       }
 
       room.currentMatch.votes[
-        socket.id
+        clientId
       ] = opinionId;
 
       room.currentMatch
         .submittedPlayers.add(
-          socket.id
+          clientId
         );
 
       const guessResults = [];
 
-      if (guesses) {
-        for (
-          const [
-            guessedOpinionId,
-            guessedPlayerId,
-          ] of Object.entries(
-            guesses
+      for (
+        const [
+          guessedOpinionId,
+          guessedPlayerId,
+        ] of Object.entries(
+          guesses ?? {}
+        )
+      ) {
+        if (
+          !validIds.includes(
+            guessedOpinionId
           )
         ) {
-          if (
-            !validOpinionIds.includes(
-              guessedOpinionId
-            )
-          ) {
-            continue;
-          }
+          continue;
+        }
 
-          const result =
-            processAuthorGuess(
-              room,
-              player,
-              guessedOpinionId,
-              guessedPlayerId
-            );
+        const result =
+          processAuthorGuess(
+            room,
+            player,
+            guessedOpinionId,
+            guessedPlayerId
+          );
 
-          if (result) {
-            guessResults.push(
-              result
-            );
-          }
+        if (result) {
+          guessResults.push(
+            result
+          );
         }
       }
 
@@ -943,9 +1092,7 @@ io.on("connection", (socket) => {
       const room =
         rooms.get(roomCode);
 
-      if (!room) {
-        return;
-      }
+      if (!room) return;
 
       if (
         room.hostSocketId !==
@@ -982,39 +1129,50 @@ io.on("connection", (socket) => {
           room.hostSocketId ===
           socket.id
         ) {
-          if (room.matchTimer) {
-            clearTimeout(
-              room.matchTimer
-            );
-          }
+          room.hostSocketId =
+            null;
 
-          io.to(roomCode).emit(
-            "room-closed"
-          );
+          room.hostDisconnectTimer =
+            setTimeout(() => {
+              io.to(roomCode).emit(
+                "room-closed"
+              );
 
-          rooms.delete(roomCode);
+              rooms.delete(
+                roomCode
+              );
+            }, 30000);
 
           continue;
         }
 
-        room.players =
-          room.players.filter(
-            (player) =>
-              player.id !==
+        const player =
+          room.players.find(
+            (item) =>
+              item.socketId ===
               socket.id
           );
+
+        if (!player) {
+          continue;
+        }
+
+        player.socketId =
+          null;
+
+        player.disconnectTimer =
+          setTimeout(() => {
+            player.disconnectTimer =
+              null;
+
+            emitRoomUpdate(
+              roomCode
+            );
+          }, 30000);
 
         emitRoomUpdate(
           roomCode
         );
-
-        if (
-          room.currentMatch
-        ) {
-          emitVotingProgress(
-            room
-          );
-        }
       }
     }
   );

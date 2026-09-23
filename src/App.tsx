@@ -16,6 +16,7 @@ type Player = {
   name: string;
   hasSubmitted: boolean;
   score: number;
+  connected?: boolean;
 };
 
 type Opinion = {
@@ -49,6 +50,65 @@ type MatchData = {
 
   endsAt: number;
 };
+
+type StoredSession = {
+  roomCode: string;
+  role: "host" | "player";
+};
+
+function getClientId() {
+  let id =
+    localStorage.getItem(
+      "hot-take-client-id"
+    );
+
+  if (!id) {
+    id =
+      crypto.randomUUID();
+
+    localStorage.setItem(
+      "hot-take-client-id",
+      id
+    );
+  }
+
+  return id;
+}
+
+const clientId =
+  getClientId();
+
+function saveSession(
+  session: StoredSession
+) {
+  localStorage.setItem(
+    "hot-take-session",
+    JSON.stringify(session)
+  );
+}
+
+function clearSession() {
+  localStorage.removeItem(
+    "hot-take-session"
+  );
+}
+
+function getStoredSession():
+  | StoredSession
+  | null {
+  const raw =
+    localStorage.getItem(
+      "hot-take-session"
+    );
+
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
 
 function getRoundName(
   roundNumber: number,
@@ -216,8 +276,97 @@ function App() {
     setRevealAuthors,
   ] = useState(false);
 
+  const [
+    restoringSession,
+    setRestoringSession,
+  ] = useState(true);
+
   const autoSubmittedRef =
     useRef(false);
+
+  function applySnapshot(
+    response: any
+  ) {
+    setPlayers(
+      response.players ?? []
+    );
+
+    setGameState(
+      response.gameState ??
+        "lobby"
+    );
+
+    setSubmittedCount(
+      response.submittedCount ??
+        0
+    );
+
+    setRevealAuthors(
+      response.revealAuthors ??
+        false
+    );
+
+    if (
+      response.role === "host"
+    ) {
+      setHostRoomCode(
+        response.roomCode
+      );
+    } else {
+      setJoinedRoomCode(
+        response.roomCode
+      );
+
+      setPlayerName(
+        response.playerName ??
+          ""
+      );
+
+      setHasSubmittedOpinions(
+        response.hasSubmittedOpinions ??
+          false
+      );
+    }
+
+    if (
+      response.currentMatch
+    ) {
+      setCurrentMatch(
+        response.currentMatch
+      );
+
+      setVotingProgress(
+        response.votingProgress ?? {
+          submitted: 0,
+          total: 0,
+        }
+      );
+
+      setRoundSubmitted(
+        response.roundSubmitted ??
+          false
+      );
+    }
+
+    if (
+      response.gameState ===
+      "finished"
+    ) {
+      setGameWinner(
+        response.winner
+      );
+
+      setFinalRankings(
+        response.rankings ??
+          []
+      );
+
+      setFinalPlayers(
+        response.finalPlayers ??
+          []
+      );
+    }
+  }
 
   useEffect(() => {
     const parts =
@@ -236,6 +385,66 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const restore = () => {
+      const session =
+        getStoredSession();
+
+      if (!session) {
+        setRestoringSession(
+          false
+        );
+
+        return;
+      }
+
+      socket.emit(
+        "resume-session",
+        {
+          roomCode:
+            session.roomCode,
+
+          clientId,
+
+          role:
+            session.role,
+        },
+
+        (response: any) => {
+          if (
+            response?.success
+          ) {
+            applySnapshot(
+              response
+            );
+          } else {
+            clearSession();
+          }
+
+          setRestoringSession(
+            false
+          );
+        }
+      );
+    };
+
+    if (socket.connected) {
+      restore();
+    }
+
+    socket.on(
+      "connect",
+      restore
+    );
+
+    return () => {
+      socket.off(
+        "connect",
+        restore
+      );
+    };
+  }, []);
+
+  useEffect(() => {
     if (!currentMatch) {
       return;
     }
@@ -245,15 +454,14 @@ function App() {
         currentMatch.endsAt -
         Date.now();
 
-      const seconds =
+      setSecondsLeft(
         Math.max(
           0,
           Math.ceil(
             milliseconds / 1000
           )
-        );
-
-      setSecondsLeft(seconds);
+        )
+      );
     };
 
     updateTimer();
@@ -297,11 +505,7 @@ function App() {
 
   useEffect(() => {
     const handleRoomUpdated = (
-      data: {
-        players: Player[];
-        gameState: GameState;
-        submittedCount: number;
-      }
+      data: any
     ) => {
       setPlayers(
         data.players
@@ -317,9 +521,7 @@ function App() {
     };
 
     const handleGameStateChanged =
-      (data: {
-        gameState: GameState;
-      }) => {
+      (data: any) => {
         setGameState(
           data.gameState
         );
@@ -360,30 +562,21 @@ function App() {
       };
 
     const handleVotingProgress =
-      (data: {
-        submitted: number;
-        total: number;
-      }) => {
+      (data: any) => {
         setVotingProgress(
           data
         );
       };
 
     const handleMatchResult =
-      (data: {
-        votesA: number;
-        votesB: number;
-        winner: Opinion;
-      }) => {
+      (data: any) => {
         setMatchResult(
           data
         );
       };
 
     const handleScoresUpdated =
-      (data: {
-        players: Player[];
-      }) => {
+      (data: any) => {
         setPlayers(
           data.players
         );
@@ -394,12 +587,7 @@ function App() {
       };
 
     const handleGameFinished =
-      (data: {
-        winner: Opinion;
-        rankings: Opinion[];
-        players: Player[];
-        revealAuthors: boolean;
-      }) => {
+      (data: any) => {
         setGameWinner(
           data.winner
         );
@@ -422,9 +610,7 @@ function App() {
       };
 
     const handleAuthorsRevealed =
-      (data: {
-        revealAuthors: boolean;
-      }) => {
+      (data: any) => {
         setRevealAuthors(
           data.revealAuthors
         );
@@ -432,6 +618,8 @@ function App() {
 
     const handleRoomClosed =
       () => {
+        clearSession();
+
         alert(
           "The host ended the room."
         );
@@ -537,16 +725,23 @@ function App() {
     () => {
       socket.emit(
         "create-room",
-        (response: {
-          success: boolean;
-          roomCode: string;
-        }) => {
+        {
+          clientId,
+        },
+
+        (response: any) => {
           if (
             response.success
           ) {
             setHostRoomCode(
               response.roomCode
             );
+
+            saveSession({
+              roomCode:
+                response.roomCode,
+              role: "host",
+            });
           }
         }
       );
@@ -586,14 +781,11 @@ function App() {
 
           playerName:
             playerName.trim(),
+
+          clientId,
         },
 
-        (response: {
-          success: boolean;
-          roomCode?: string;
-          players?: Player[];
-          message?: string;
-        }) => {
+        (response: any) => {
           if (
             !response.success
           ) {
@@ -606,14 +798,18 @@ function App() {
           }
 
           setJoinedRoomCode(
-            response.roomCode ??
-              ""
+            response.roomCode
           );
 
           setPlayers(
-            response.players ??
-              []
+            response.players
           );
+
+          saveSession({
+            roomCode:
+              response.roomCode,
+            role: "player",
+          });
         }
       );
     };
@@ -627,16 +823,12 @@ function App() {
             hostRoomCode,
         },
 
-        (response: {
-          success: boolean;
-          message?: string;
-        }) => {
+        (response: any) => {
           if (
             !response.success
           ) {
             setErrorMessage(
-              response.message ??
-                "Unable to start."
+              response.message
             );
           }
         }
@@ -687,19 +879,17 @@ function App() {
           roomCode:
             joinedRoomCode,
 
+          clientId,
+
           opinions,
         },
 
-        (response: {
-          success: boolean;
-          message?: string;
-        }) => {
+        (response: any) => {
           if (
             !response.success
           ) {
             setErrorMessage(
-              response.message ??
-                "Unable to submit."
+              response.message
             );
 
             return;
@@ -730,6 +920,8 @@ function App() {
         roomCode:
           joinedRoomCode,
 
+        clientId,
+
         opinionId:
           selectedVote,
 
@@ -737,24 +929,14 @@ function App() {
           selectedGuesses,
       },
 
-      (response: {
-        success: boolean;
-        message?: string;
-        guessResults?: Array<{
-          opinionId: string;
-          correct: boolean;
-          points: number;
-        }>;
-      }) => {
+      (response: any) => {
         if (
-          !response.success
+          !response.success &&
+          !automatic
         ) {
-          if (!automatic) {
-            setErrorMessage(
-              response.message ??
-                "Unable to submit."
-            );
-          }
+          setErrorMessage(
+            response.message
+          );
         }
       }
     );
@@ -806,6 +988,20 @@ function App() {
       );
     };
 
+  if (restoringSession) {
+    return (
+      <main className="app-shell">
+        <section className="game-card">
+          <div className="loading-ring" />
+
+          <p className="subtitle">
+            Reconnecting...
+          </p>
+        </section>
+      </main>
+    );
+  }
+
   const joinUrl =
     hostRoomCode
       ? `${window.location.origin}/join/${hostRoomCode}`
@@ -835,7 +1031,7 @@ function App() {
             .filter(
               (player) =>
                 player.id !==
-                socket.id
+                clientId
             )
             .map(
               (player) => {
@@ -930,8 +1126,7 @@ function App() {
                     >
                       <div className="ranking-number">
                         #
-                        {index +
-                          1}
+                        {index + 1}
                       </div>
 
                       <div className="ranking-content">
@@ -972,19 +1167,13 @@ function App() {
                     }
                   >
                     <span>
-                      {index ===
-                      0
+                      {index === 0
                         ? "🥇"
-                        : index ===
-                          1
+                        : index === 1
                         ? "🥈"
-                        : index ===
-                          2
+                        : index === 2
                         ? "🥉"
-                        : `#${
-                            index +
-                            1
-                          }`}
+                        : `#${index + 1}`}
                     </span>
 
                     <span className="score-name">
@@ -1058,8 +1247,7 @@ function App() {
 
             <div
               className={`countdown ${
-                secondsLeft <=
-                3
+                secondsLeft <= 3
                   ? "countdown-danger"
                   : ""
               }`}
@@ -1181,8 +1369,7 @@ function App() {
           {!isHost &&
             !roundSubmitted &&
             selectedVote &&
-            secondsLeft <=
-              3 && (
+            secondsLeft <= 3 && (
               <p className="auto-submit-message">
                 Your current selection will automatically submit when time runs out.
               </p>
@@ -1335,8 +1522,7 @@ function App() {
               handleStartGame
             }
             disabled={
-              players.length ===
-              0
+              players.length === 0
             }
           >
             Start Game
